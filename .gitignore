@@ -9,3 +9,7 @@
 
 # Claude Code local settings
 .claude/
+
+# Publisher PDFs: kept locally for the agent, not redistributed (links are in each report)
+partB/article.pdf
+partB/SI.pdf

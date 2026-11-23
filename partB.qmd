@@ -1,0 +1,109 @@
+---
+title: "Reproducibility check: Sievers et al. (2013)"
+author: "Nick Madibekov"
+date: today
+format:
+  html:
+    toc: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Article
+
+- Citation and DOI: Sievers, B., Polansky, L., Casey, M., & Wheatley, T. (2013). Music and
+  movement share a dynamic structure that supports universal expressions of emotion.
+  *Proceedings of the National Academy of Sciences, 110*(1), 70–75.
+  <https://doi.org/10.1073/pnas.1209023110>
+- Data/materials repository URL: no separate repository; the data are the paper's supporting
+  information on PNAS (<https://www.pnas.org/lookup/suppl/doi:10.1073/pnas.1209023110/-/DCSupplemental>),
+  mirrored on PubMed Central (<https://pmc.ncbi.nlm.nih.gov/articles/PMC3538264/>): Datasets S1–S2
+  (`.xlsx`), the SI text (PDF), and the audio and video stimuli.
+- Part A (known case) or Part B (a classmate's project paper): Part B
+- Part B only: the classmate's project repo, and which target outcome is its key effect:
+  <https://github.com/psych251/sievers2012>. Key effect: **row 2**, the Emotion × Slider
+  interaction in the United States experiment (ηp² = .70).
+
+## Target outcomes
+
+Written **before** opening the data. Quote each from the paper. In Part B, one of these must
+be the project's key effect.
+
+Written on 2026-11-23 from the published article (Results sections). Rows 1–3 come from the United States experiment (*n* = 50; music *n* = 25, movement
+*n* = 25), rows 4–6 from the combined United States + Kreung analyses (Kreung music *n* = 42,
+movement *n* = 43). Together they cover the abstract's claims: each emotion has a unique
+combination of features (rows 2, 4), the same combination works in music and movement (row 3), and
+the structure holds across cultures (rows 5, 6).
+
+| # | Target outcome (quoted) | Paper value(s) |
+|---|---|---|
+| 1 | US experiment, multiway ANOVA: "Emotion had the largest main effect on slider position [F(2.97, 142.44) = 185.56, P < 0.001, partial η2 = 0.79]" | *F*(2.97, 142.44) = 185.56, *p* < .001, ηp² = .79 |
+| 2 | **Key effect.** US experiment: "an Emotion × Slider interaction indicating each emotion required different slider settings [F(4.81, 230.73) = 112.90, P < 0.001; partial η2 = 0.70]" | *F*(4.81, 230.73) = 112.90, *p* < .001, ηp² = .70 |
+| 3 | US experiment: modality "did not interact with Emotion [Emotion × Modality: F(2.97, 142.44) = 0.97, P > 0.4; partial η2 = 0.02]" | *F*(2.97, 142.44) = 0.97, *p* > .4, ηp² = .02 |
+| 4 | Combined US + Kreung ANOVA on z-scored sliders: "an Emotion × Sliders interaction, indicating each emotion was expressed by different slider settings [F(13.68, 1791.80) = 38.22, P < 0.001; partial η2 = 0.23]" | *F*(13.68, 1791.80) = 38.22, *p* < .001, ηp² = .23 |
+| 5 | Monte Carlo simulation: "The distance between the Kreung and United States mean result vectors was 4.24, which was 3.98 SDs away from the mean"; null distribution "(mean = 8.11, SD = 0.97)"; "fewer than 30 pairs were this close together" out of one million | distance = 4.24; null mean = 8.11, SD = 0.97; *z* = 3.98; < 30 / 1,000,000 pairs |
+| 6 | Prototype analysis: "For every emotion except 'angry,'" Kreung results (music and movement combined) were closer to the matching US prototype than to any other; the same held for movement alone; for music alone, "three of the five emotions (happy, sad, and scared)" | combined: 4 of 5 (not angry); movement: 4 of 5; music: 3 of 5 (happy, sad, scared) |
+
+## Materials inventory
+
+| Item | Available? | Notes |
+|---|---|---|
+| Raw data | | |
+| Processed data | | |
+| Codebook / variable descriptions | | |
+| Analysis code | | |
+| Preregistration | | |
+
+## Reproduction
+
+The agent's work, under your direction. Keep all code visible.
+
+```{r}
+#| label: setup
+library(tidyverse)
+```
+
+```{r}
+#| label: load
+```
+
+```{r}
+#| label: preprocess
+```
+
+```{r}
+#| label: analysis
+```
+
+## Checker's verdict
+
+Filled in by you, not the agent.
+
+| # | Paper value | Reproduced value | Verdict (exact / minor / major / not reproducible) | Reason for discrepancy |
+|---|---|---|---|---|
+| 1 | | | | |
+| 2 | | | | |
+| 3 | | | | |
+
+Agent's own claim about success, and whether it was right:
+
+## Time
+
+- Your time (hours):
+- Agent wall-clock time (hours):
+- Stopped at the 4-hour cap? What remained:
+
+## Assessment
+
+Is the primary result analytically reproducible? What would have made this take 30 minutes?
+
+## AI documentation
+
+- Agent and interface (e.g., Claude Code, Codex CLI, Cursor):
+- Model and version, if the tool reports it:
+- Context you gave it (files, instructions, any context file):
+- Number of times you intervened, and the most important intervention:
+- Transcript: link to the exported transcript in your repo (`transcripts/`). If your tool
+  cannot export one, paste your prompts in order here instead.
