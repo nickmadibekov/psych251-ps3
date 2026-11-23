@@ -1,0 +1,11 @@
+.DS_Store
+.Rhistory
+.Rproj.user/
+
+# Quarto outputs (the rendered report is hosted on Posit Connect Cloud)
+.quarto/
+*_files/
+*.html
+
+# Claude Code local settings
+.claude/

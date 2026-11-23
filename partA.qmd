@@ -1,6 +1,6 @@
 ---
-title: "Reproducibility check: [Author et al. (Year)]"
-author: "[Your name]"
+title: "Reproducibility check: Maglio & Polman (2014)"
+author: "Nick Madibekov"
 date: today
 format:
   html:
@@ -13,31 +13,40 @@ execute:
 
 ## Article
 
-- Citation and DOI:
-- Data/materials repository URL:
-- Part A (known case) or Part B (a classmate's project paper):
-- Part B only: the classmate's project repo, and which target outcome is its key effect:
+- Citation and DOI: Maglio, S. J., & Polman, E. (2014). Spatial orientation shrinks and expands
+  psychological distance. *Psychological Science, 25*(7), 1345–1352.
+  <https://doi.org/10.1177/0956797614530571>
+- Data/materials repository URL: <https://osf.io/7rajd/> (local copy: `partA/data/S1_Subway.xlsx`)
+- Part A (known case) or Part B (a classmate's project paper): Part A (Study 1 only)
+- Part B only: the classmate's project repo, and which target outcome is its key effect: n/a
 
 ## Target outcomes
 
 Written **before** opening the data. Quote each from the paper. In Part B, one of these must
 be the project's key effect.
 
+All quotes are from the Study 1 Results section (p. 1346–1347), as listed in
+`partA/reproducibilityReport.Rmd`.
+
 | # | Target outcome (quoted) | Paper value(s) |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
+| 1 | "no main effect of orientation, F < 1" | *F* < 1 |
+| 2 | "a main effect of station, F(3, 194) = 24.10, p < .001, ηp2 = .27" | *F*(3, 194) = 24.10, *p* < .001, ηp² = .27 |
+| 3 | "the predicted interaction between orientation and station, F(3, 194) = 16.28, p < .001, ηp2 = .20" | *F*(3, 194) = 16.28, *p* < .001, ηp² = .20 |
+| 4 | "the station one stop to the west (St. George, p < .001, ηp2 = .28)" | *p* < .001, ηp² = .28 |
+| 5 | "the station two stops to the west (Spadina, p = .001, ηp2 = .20)" | *p* = .001, ηp² = .20 |
+| 6 | "the station one stop to the east (Bloor-Yonge, p = .053, ηp2 = .08)" | *p* = .053, ηp² = .08 |
+| 7 | "the station two stops to the east (Sherbourne, p < .001, ηp2 = .24)" | *p* < .001, ηp² = .24 |
 
 ## Materials inventory
 
 | Item | Available? | Notes |
 |---|---|---|
-| Raw data | | |
-| Processed data | | |
-| Codebook / variable descriptions | | |
-| Analysis code | | |
-| Preregistration | | |
+| Raw data | Yes | `S1_Subway.xlsx`: one row per participant (N = 202), columns `DIRECTION`, `DISTANCE`, `STN_NUMBER`, `STN_NAME`. |
+| Processed data | Same file | No exclusions or derived variables; the file already matches the analysed sample. |
+| Codebook / variable descriptions | No | Variables are interpretable from the paper: `STN_NUMBER` 1–4 runs west to east (Spadina, St. George, Bloor-Yonge, Sherbourne); `DISTANCE` is the 1–7 rating. |
+| Analysis code | No | Neither the paper nor the local data folder includes analysis scripts. |
+| Preregistration | No | The paper states a 20-per-cell stopping rule was set in advance, but there is no preregistration document. |
 
 ## Reproduction
 
@@ -46,19 +55,169 @@ The agent's work, under your direction. Keep all code visible.
 ```{r}
 #| label: setup
 library(tidyverse)
+library(readxl) # read the authors' .xlsx file
+library(car)    # Type III sums of squares (SPSS-style), via car::Anova()
+library(knitr)  # tables
 ```
 
 ```{r}
 #| label: load
+d_raw <- read_excel("partA/data/S1_Subway.xlsx")
+
+glimpse(d_raw)
+count(d_raw, DIRECTION)                       # paper: n = 101 per platform
+count(d_raw, STN_NUMBER, STN_NAME, DIRECTION) # cell sizes
 ```
 
 ```{r}
 #| label: preprocess
+station_labels <- c(SPAD = "Spadina", STG = "St. George",
+                    `B-Y` = "Bloor-Yonge", SHER = "Sherbourne")
+
+d <- d_raw |>
+  mutate(
+    # stations ordered west to east, as in the paper and STN_NUMBER
+    station   = factor(station_labels[STN_NAME], levels = station_labels),
+    direction = factor(str_to_title(DIRECTION), levels = c("East", "West")),
+    side      = if_else(station %in% c("Spadina", "St. George"), "West of Bay", "East of Bay"),
+    # literal toward/away coding: heading east is toward the two east stations
+    orientation = factor(
+      if_else((direction == "East" & side == "East of Bay") |
+              (direction == "West" & side == "West of Bay"), "Toward", "Away"),
+      levels = c("Toward", "Away"))
+  )
+
+stopifnot(nrow(d) == 202, !anyNA(d$station), !anyNA(d$DISTANCE))
+
+cell_stats <- d |>
+  group_by(station, direction) |>
+  summarise(n = n(), mean = mean(DISTANCE), sd = sd(DISTANCE),
+            se = sd / sqrt(n), .groups = "drop")
+kable(cell_stats, digits = 2)
+```
+
+```{r}
+#| label: fig1
+#| fig-cap: "Reproduction of Figure 1: mean subjective distance (+/- 1 SE) by station and travel direction."
+ggplot(cell_stats, aes(station, mean, fill = direction)) +
+  geom_col(position = position_dodge(0.8), width = 0.75) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se),
+                position = position_dodge(0.8), width = 0.2) +
+  scale_y_continuous(limits = c(0, 5), breaks = seq(0, 5, 0.5)) +
+  scale_fill_manual(values = c(East = "grey30", West = "grey75"),
+                    labels = c(East = "Traveling East", West = "Traveling West")) +
+  labs(x = NULL, y = "Subjective Distance", fill = NULL) +
+  theme_classic() +
+  theme(legend.position = "top")
 ```
 
 ```{r}
 #| label: analysis
+# Partial eta squared from a car::Anova table
+add_pes <- function(tab) {
+  ss_err <- tab["Residuals", "Sum Sq"]
+  tab |>
+    as.data.frame() |>
+    rownames_to_column("term") |>
+    filter(!term %in% c("(Intercept)", "Residuals")) |>
+    transmute(term, df1 = Df, df2 = tab["Residuals", "Df"],
+              F = `F value`, p = `Pr(>F)`, pes = `Sum Sq` / (`Sum Sq` + ss_err))
+}
+
+# --- Omnibus 2 x 4 between-subjects ANOVA ---------------------------------
+# Cells are unequal (23-26), so the SS type matters. Type III with sum-to-zero
+# contrasts (SPSS's default) is used here.
+#
+# The between-subjects factor that reproduces the paper is travel DIRECTION
+# (eastbound vs. westbound platform). The paper labels this factor
+# "orientation", but within a station, direction is exactly what varies.
+m_dir <- lm(DISTANCE ~ direction * station, data = d,
+            contrasts = list(direction = contr.sum, station = contr.sum))
+omnibus <- add_pes(Anova(m_dir, type = 3))
+kable(omnibus, digits = 3, caption = "Type III ANOVA: direction x station")
+
+# For comparison: other SS types for the same model
+kable(add_pes(Anova(m_dir, type = 2)), digits = 3, caption = "Type II (same model)")
+kable(anova(m_dir) |> as.data.frame() |> rownames_to_column("term"),
+      digits = 3, caption = "Type I / sequential (same model)")
+
+# For comparison: literal toward/away coding of orientation. This model gives
+# a large orientation main effect and no interaction, the reverse of what the
+# paper reports, so it is not what the authors ran.
+m_orient <- lm(DISTANCE ~ orientation * station, data = d,
+               contrasts = list(orientation = contr.sum, station = contr.sum))
+kable(add_pes(Anova(m_orient, type = 3)), digits = 3,
+      caption = "Type III ANOVA with literal toward/away coding (not the paper's analysis)")
+
+# --- Station-specific comparisons (East vs. West) --------------------------
+# A separate one-way ANOVA (= pooled-variance t test) within each station.
+# ηp² = SS_direction / (SS_direction + SS_error) within that station.
+simple_effects <- d |>
+  group_by(station) |>
+  group_modify(\(ds, key) {
+    a <- anova(lm(DISTANCE ~ direction, data = ds))
+    tibble(mean_east = mean(ds$DISTANCE[ds$direction == "East"]),
+           mean_west = mean(ds$DISTANCE[ds$direction == "West"]),
+           df1 = a$Df[1], df2 = a$Df[2], F = a$`F value`[1], p = a$`Pr(>F)`[1],
+           pes = a$`Sum Sq`[1] / sum(a$`Sum Sq`))
+  }) |>
+  ungroup()
+kable(simple_effects, digits = 3, caption = "East vs. West within each station")
+
+# For comparison: the same contrasts tested against the pooled error term of
+# the omnibus model (df = 194). Only Bloor-Yonge's p changes at the reported
+# precision (.051 instead of .053), so the paper used separate tests.
+pooled <- emmeans::emmeans(m_dir, ~ direction | station) |>
+  emmeans::contrast("pairwise") |>
+  as_tibble()
+kable(pooled, digits = 4, caption = "East - West contrasts using the omnibus error term")
 ```
+
+```{r}
+#| label: compare
+# Paper vs. reproduced values (numbers only; no verdicts). pes = partial eta squared.
+fmt_p <- function(p) if_else(p < .001, "< .001", sub("^0", "", sprintf("%.3f", p)))
+get_row <- function(tab, col, key) tab[tab[[col]] == key, ]
+
+o_dir <- get_row(omnibus, "term", "direction")
+o_stn <- get_row(omnibus, "term", "station")
+o_int <- get_row(omnibus, "term", "direction:station")
+se_ <- \(s) get_row(simple_effects, "station", s)
+
+comparison <- tribble(
+  ~`#`, ~outcome, ~paper, ~reproduced,
+  1, "Main effect of orientation (direction)", "F < 1",
+     sprintf("F(%d, %d) = %.2f, p = %s, pes = %.3f", o_dir$df1, o_dir$df2, o_dir$F, fmt_p(o_dir$p), o_dir$pes),
+  2, "Main effect of station", "F(3, 194) = 24.10, p < .001, pes = .27",
+     sprintf("F(%d, %d) = %.2f, p %s, pes = %.3f", o_stn$df1, o_stn$df2, o_stn$F, fmt_p(o_stn$p), o_stn$pes),
+  3, "Orientation x station interaction", "F(3, 194) = 16.28, p < .001, pes = .20",
+     sprintf("F(%d, %d) = %.2f, p %s, pes = %.3f", o_int$df1, o_int$df2, o_int$F, fmt_p(o_int$p), o_int$pes),
+  4, "St. George: East vs. West", "p < .001, pes = .28",
+     sprintf("F(%d, %d) = %.2f, p %s, pes = %.3f", se_("St. George")$df1, se_("St. George")$df2, se_("St. George")$F, fmt_p(se_("St. George")$p), se_("St. George")$pes),
+  5, "Spadina: East vs. West", "p = .001, pes = .20",
+     sprintf("F(%d, %d) = %.2f, p = %s, pes = %.3f", se_("Spadina")$df1, se_("Spadina")$df2, se_("Spadina")$F, fmt_p(se_("Spadina")$p), se_("Spadina")$pes),
+  6, "Bloor-Yonge: East vs. West", "p = .053, pes = .08",
+     sprintf("F(%d, %d) = %.2f, p = %s, pes = %.3f", se_("Bloor-Yonge")$df1, se_("Bloor-Yonge")$df2, se_("Bloor-Yonge")$F, fmt_p(se_("Bloor-Yonge")$p), se_("Bloor-Yonge")$pes),
+  7, "Sherbourne: East vs. West", "p < .001, pes = .24",
+     sprintf("F(%d, %d) = %.2f, p %s, pes = %.3f", se_("Sherbourne")$df1, se_("Sherbourne")$df2, se_("Sherbourne")$F, fmt_p(se_("Sherbourne")$p), se_("Sherbourne")$pes)
+)
+kable(comparison)
+```
+
+**Notes on analysis choices (agent):**
+
+- **Factor coding.** The paper's ANOVA factor is called "orientation (toward, away from)", but the
+  reported numbers only come out when that factor is the travel direction (eastbound vs.
+  westbound). With a literal toward/away coding, orientation has a large main effect and the
+  interaction is not significant (see the comparison table in the `analysis` chunk). Within a single
+  station, direction and orientation are the same contrast, so the station-level tests are not
+  affected.
+- **Sums of squares.** Cells are unequal (*n* = 23–26). Type III SS gives station *F* = 24.10,
+  matching the paper. Type I and Type II give *F* = 23.35, so the authors probably used Type III
+  (the SPSS default). The interaction *F* is 16.28 under every SS type.
+- **Station-level tests.** Separate one-way ANOVAs (pooled-variance *t* tests) within each
+  station match all four reported *p* and ηp² values. Testing the same contrasts against the
+  omnibus error term gives Bloor-Yonge *p* = .051 instead of .053.
 
 ## Checker's verdict
 
@@ -66,27 +225,51 @@ Filled in by you, not the agent.
 
 | # | Paper value | Reproduced value | Verdict (exact / minor / major / not reproducible) | Reason for discrepancy |
 |---|---|---|---|---|
-| 1 | | | | |
-| 2 | | | | |
-| 3 | | | | |
+| 1 | *F* < 1 | *F*(1, 194) = 0.32, *p* = .574, ηp² = .002 | exact | none, but matches when orientation is coded as eastbound vs westbound (which is how Figure 1 labels it) |
+| 2 | *F*(3, 194) = 24.10, *p* < .001, ηp² = .27 | *F*(3, 194) = 24.10, *p* < .001, ηp² = .272 | exact | none, requires Type III SS (unequal cells, *n* = 23–26); Type I/II give *F* = 23.35–23.45 |
+| 3 | *F*(3, 194) = 16.28, *p* < .001, ηp² = .20 | *F*(3, 194) = 16.28, *p* < .001, ηp² = .201 | exact | none, same under every SS type; requires direction coding |
+| 4 | St. George: *p* < .001, ηp² = .28 | *F*(1, 49) = 18.79, *p* < .001, ηp² = .277 | exact | none, requires a separate test within each station; using the omnibus error term gives ηp² = .07 |
+| 5 | Spadina: *p* = .001, ηp² = .20 | *F*(1, 49) = 11.97, *p* = .001, ηp² = .196 | exact | as #4 (omnibus-error ηp² = .06) |
+| 6 | Bloor-Yonge: *p* = .053, ηp² = .08 | *F*(1, 47) = 3.95, *p* = .053, ηp² = .077 | exact | as #4 (omnibus-error ηp² = .02, *p* = .050). Welch's *t* gives *p* = .047 |
+| 7 | Sherbourne: *p* < .001, ηp² = .24 | *F*(1, 49) = 15.11, *p* < .001, ηp² = .236 | exact | as #4 (omnibus-error ηp² = .08) |
+
 
 Agent's own claim about success, and whether it was right:
 
+Its claim was right. All 7 values match and the 3 analysis choices it worked out are correct. But:
+
+- It chose the factor coding by trying codings until the numbers matched and it didn't cite the evidence in the paper itself: Figure 1's legend labels the lines traveling west and east, and its caption calls that "the participant's orientation". The follow-up tests also compare east- and westbound riders. That evidence is what makes the verdict defensible.
+
+- Its evidence for separate per-station tests was weaker: it pointed to Bloor-Yonge's *p* shifting slightly when the omnibus error term is used. The decisive evidence is ηp²: the omnibus-error version gives .02–.08, which doesn't match the paper's four values.
+
+- It didn't try Welch's t-test, which doesn't assume equal variances. Under Welch, Bloor-Yonge comes out at p = .047, below .05. So whether that result is "significant" depends on the test chosen.
+
+- It missed a problem with Figure 1. The paper's caption says the error bars are ±1 SE, but they aren't per-cell SEs. Each line has the same bar length everywhere: about ±0.50 for West and ±0.42 for East. Those match the standard error of the four plotted means, 0.504 and 0.419. The true per-cell SEs are 0.15–0.24. The agent's remake uses the correct SEs (and bars instead of lines) and doesn't say it differs from the paper.
+
+What it did well: it showed each alternative analysis next to the one it chose (SS types, both codings, omnibus-error tests), checked N and cell sizes with stopifnot, left the data unaltered (files identical to the course copy), and the report renders.
+
 ## Time
 
-- Your time (hours):
-- Agent wall-clock time (hours):
-- Stopped at the 4-hour cap? What remained:
+- Your time (hours): 2.5 hours
+- Agent wall-clock time (hours): 0.06 hours
+- Stopped at the 4-hour cap? What remained: n/a
 
 ## Assessment
 
 Is the primary result analytically reproducible? What would have made this take 30 minutes?
 
+The result is analytically reproducible (same data, same analysis, same result) without contacting the authors. The caveat is that "same analysis" had to be inferred (the factor was travel direction (eastbound vs westbound), not toward/away as the paper says; Type III sums of squares; and separate tests within each station).
+
+It would have been nicer to have the SPSS syntax or output, a codebook, CSV files instead of .xlsx, a README linking each data file to its study, and stating the SS type and how the station tests were run.
+
 ## AI documentation
 
-- Agent and interface (e.g., Claude Code, Codex CLI, Cursor):
-- Model and version, if the tool reports it:
-- Context you gave it (files, instructions, any context file):
-- Number of times you intervened, and the most important intervention:
-- Transcript: link to the exported transcript in your repo (`transcripts/`). If your tool
-  cannot export one, paste your prompts in order here instead.
+- Agent and interface (e.g., Claude Code, Codex CLI, Cursor): Claude Code (Claude desktop app, Code tab)
+- Model and version, if the tool reports it: Claude Opus 5.5 (`claude-opus-5-5`)
+- Context you gave it (files, instructions, any context file): new Claude Code session opened in this repo with only partA/ (article, data, reproducibilityReport.Rmd) and partA.qmd copied from the template. I first used it, before the repo existed, to make two random picks for which Part A article to do; Claude didn't know what the options were. I then moved the session into this repo, and gave one prompt: 'reproduce the target outcomes that are decsribed in partA/reproducibilityReport.Rmd using the paper (partA/article.pdf) and the authors' data (partA/data/). put all your code in partA.qmd and leave "Checker's verdict" blank. tell me when you're done and whether you think you succeeded.'
+  
+- Number of times you intervened, and the most important intervention: 0
+- Transcript: [`transcripts/partA_agent_transcript.md`](https://github.com/nickmadibekov/psych251-ps3/blob/main/transcripts/partA_agent_transcript.md)
+  (readable) and [`transcripts/partA_agent_transcript.jsonl`](https://github.com/nickmadibekov/psych251-ps3/blob/main/transcripts/partA_agent_transcript.jsonl)
+  (full record). Exported from the Claude desktop app; app-internal records and the app's opening
+  setup note were dropped, and my home path and email were redacted.
