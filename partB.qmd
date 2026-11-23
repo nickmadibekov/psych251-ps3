@@ -50,11 +50,11 @@ the structure holds across cultures (rows 5, 6).
 
 | Item | Available? | Notes |
 |---|---|---|
-| Raw data | | |
-| Processed data | | |
-| Codebook / variable descriptions | | |
-| Analysis code | | |
-| Preregistration | | |
+| Raw data | Yes | Each participant's final slider settings, one row per participant × emotion, from the SI on PubMed Central. Dataset S1 (`partB/data/Dataset_S01.xlsx`): United States, continuous values, 250 rows. Dataset S2 (`partB/data/Dataset_S02.xlsx`): all participants (United States and Kreung), discrete values 0/1/2, 675 rows. No slider-movement logs or demographics. |
+| Processed data | Partial | According to the SI, the United States rows of Dataset S2 are Dataset S1 discretized to three levels (cut-points in SI Table S4), to match the Kreung program's three positions. Group means are in SI Table S1 (raw) and Table S2 (z-scored). There are no participant-level z-scored data. |
+| Codebook / variable descriptions | Partial | No codebook file. Column meanings come from the Methods and SI Table S1: `bpm` = rate (30–400), `jitter` (0–99), `consonance` = consonance / visual spikiness (0–37), `bigsmall` = step size (0–100), `updown` = direction (0–100); `task modality` = `music` or `motion` (movement); `population` = `us` or `kreung`. The first column is an unnamed row index. |
+| Analysis code | No | None shared. The paper names the analyses (repeated-measures ANOVA with Greenhouse–Geisser correction, a Monte Carlo simulation, distances to emotion prototypes) but not the software or every setting. The stimulus program (Max/MSP, Processing) is not analysis code. |
+| Preregistration | No | Not preregistered (published 2012). |
 
 ## Reproduction
 
