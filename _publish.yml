@@ -1,0 +1,4 @@
+- source: partA.qmd
+  posit-connect-cloud:
+    - id: 01a20a21-336c-0353-c263-d91691cb4f21
+      url: https://connect.posit.cloud/nickmadibekov/content/01a20a21-336c-0353-c263-d91691cb4f21
