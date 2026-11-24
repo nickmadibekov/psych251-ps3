@@ -31,7 +31,7 @@ execute:
 Written **before** opening the data. Quote each from the paper. In Part B, one of these must
 be the project's key effect.
 
-Written on 2026-11-23 from the published article (Results sections). Rows 1–3 come from the United States experiment (*n* = 50; music *n* = 25, movement
+Rows 1–3 come from the United States experiment (*n* = 50; music *n* = 25, movement
 *n* = 25), rows 4–6 from the combined United States + Kreung analyses (Kreung music *n* = 42,
 movement *n* = 43). Together they cover the abstract's claims: each emotion has a unique
 combination of features (rows 2, 4), the same combination works in music and movement (row 3), and
@@ -60,21 +60,613 @@ the structure holds across cultures (rows 5, 6).
 
 The agent's work, under your direction. Keep all code visible.
 
+Everything below uses only `partB/data/Dataset_S01.xlsx` and `partB/data/Dataset_S02.xlsx`,
+which are read but never modified. Wherever the paper and SI leave a choice open it is tagged
+**D1–D12**, and each choice is explained, with its alternatives, under
+[Analysis decisions](#analysis-decisions). The [summary table](#summary-table) at the end gives
+one row per target.
+
 ```{r}
 #| label: setup
 library(tidyverse)
+library(readxl)   # read the .xlsx datasets
+library(rstatix)  # mixed ANOVA; the GG / HF corrections come from car::Anova
+library(knitr)    # kable() tables
+
+sliders  <- c("bpm", "jitter", "consonance", "bigsmall", "updown")
+emotions <- c("angry", "happy", "peaceful", "sad", "scared")
+# Symbols inside R strings are written as HTML entities (&eta;, &sup2;, &times;) so the tables
+# render correctly whatever the R session's locale.
+
+# Mixed ANOVA with Emotion x Slider within participants.
+# US experiment: Modality between. Combined analysis: Population x Modality between.
+# Returns a tibble whose DFn / DFd are the sphericity-corrected df.
+fit_us <- function(d, dv = "value", correction = "GG", type = 3) {
+  res <- anova_test(data = d, dv = !!dv, wid = pid, between = modality,
+                    within = c(emotion, slider), effect.size = "pes", type = type,
+                    detailed = TRUE)
+  unrounded_table(res, correction)
+}
+fit_combined <- function(d, dv = "z", correction = "GG", type = 3) {
+  res <- anova_test(data = d, dv = !!dv, wid = pid, between = c(population, modality),
+                    within = c(emotion, slider), effect.size = "pes", type = type,
+                    detailed = TRUE)
+  unrounded_table(res, correction)
+}
+# rstatix rounds F and partial eta^2 to 3 decimals, and report_F() below would round them a
+# second time (e.g. 4.9146 -> 4.915 -> "4.92"). So F and pes are recomputed from the sums of
+# squares with the uncorrected df (the sphericity correction scales both df, so it cancels out
+# of F); every value printed in the text uses these. rstatix's own values are kept as F_rstatix
+# and pes_rstatix for the two full ANOVA tables, where they are the more precise ones for very
+# small effects.
+unrounded_table <- function(res, correction) {
+  exact <- as.data.frame(res$ANOVA) |>
+    transmute(Effect, F = (SSn / DFn) / (SSd / DFd), pes = SSn / (SSn + SSd))
+  as_tibble(as.data.frame(get_anova_table(res, correction = correction))) |>
+    filter(Effect != "(Intercept)") |>
+    select(Effect, DFn, DFd, F_rstatix = F, p, `p<.05`, pes_rstatix = pes) |>
+    left_join(exact, by = "Effect")
+}
+
+# One effect as "F(df1, df2) = F, p, partial eta^2", formatted like the paper
+report_F <- function(tab, effect) {
+  r  <- filter(tab, Effect == effect)
+  df <- function(x) if (x == round(x)) sprintf("%d", as.integer(x)) else sprintf("%.2f", x)
+  f  <- if (r$F < .001) "< 0.001" else if (r$F < 1) sprintf("= %.3f", r$F) else sprintf("= %.2f", r$F)
+  p  <- if (r$p < .001) "< .001" else sprintf("= %.3f", r$p)
+  sprintf("F(%s, %s) %s, p %s, &eta;p&sup2; = %.2f", df(r$DFn), df(r$DFd), f, p, r$pes)
+}
 ```
+
+### Data
 
 ```{r}
 #| label: load
+# Column 1 is an unnamed row index; keep it as `row`.
+s1_raw <- read_excel("partB/data/Dataset_S01.xlsx", .name_repair = "unique_quiet") |>
+  rename(row = 1, modality = `task modality`)
+s2_raw <- read_excel("partB/data/Dataset_S02.xlsx", .name_repair = "unique_quiet") |>
+  rename(row = 1, modality = `task modality`)
+
+dim(s1_raw)
+dim(s2_raw)
+count(s2_raw, population, modality)
+
+# Each subject label should have 5 rows (one per emotion). One label has 10:
+s1_raw |> count(subject) |> filter(n != 5)
+s1_raw |> filter(subject == "MoMR") |> select(row, subject, emotion, modality, all_of(sliders))
+```
+
+The label `MoMR` appears in two separate blocks of five rows (rows 221–225 and 236–240, with two
+other participants in between), and the two blocks hold different settings. The paper reports 25
+movement participants, and its error df (48 = 50 − 2) needs 50 US participants, but the file has only
+49 distinct labels. I therefore treat the two blocks as two participants (**D1**). No one is
+excluded (**D2**).
+
+```{r}
+#| label: load-ids
+add_pid <- function(d) {
+  d |> mutate(pid = case_when(subject == "MoMR" & row <= 225 ~ "MoMR_a",
+                              subject == "MoMR"             ~ "MoMR_b",
+                              TRUE                          ~ subject))
+}
+s1 <- add_pid(s1_raw)
+s2 <- add_pid(s2_raw)
+
+# Participants per group. Paper: US 25 + 25; Kreung music 42, movement 43
+s2 |> distinct(population, modality, pid) |> count(population, modality)
+
+# The US rows of S2 are the same participants and emotions as S1, in the same order
+stopifnot(identical(s1$pid, s2$pid[s2$population == "us"]),
+          identical(s1$emotion, s2$emotion[s2$population == "us"]))
 ```
 
 ```{r}
 #| label: preprocess
+# --- Check: the US rows of Dataset S2 are Dataset S1 snapped to the nearest Table S4 value
+s4_levels <- list(bpm = c(55, 187, 320), jitter = c(4, 25, 61), consonance = c(4, 30, 37),
+                  bigsmall = c(15, 56, 82), updown = c(39, 50, 85))
+# 0 = low, 1 = medium, 2 = high; NA when x is exactly halfway between two levels
+nearest_level <- function(x, lv) {
+  d <- abs(outer(x, lv, "-"))
+  apply(d, 1, function(r) if (sum(r == min(r)) > 1) NA_real_ else which.min(r) - 1)
+}
+s2_us <- filter(s2, population == "us")
+map_dfr(sliders, function(s) {
+  mine <- nearest_level(s1[[s]], s4_levels[[s]])
+  tie  <- is.na(mine)
+  tibble(slider = s,
+         mismatches_with_S2 = sum(mine != s2_us[[s]], na.rm = TRUE),
+         halfway_ties = sum(tie),
+         ties_raw_to_S2 = if (any(tie)) paste(s1[[s]][tie], "->", s2_us[[s]][tie], collapse = "; ") else "")
+}) |> kable(caption = "Nearest-value discretization of Dataset S1 vs. the US rows of Dataset S2")
+
+# --- Long formats
+# US continuous (Dataset S1) in raw slider units: input to targets 1-3
+us_long <- s1 |>
+  pivot_longer(all_of(sliders), names_to = "slider", values_to = "value") |>
+  mutate(across(c(pid, modality, emotion, slider), factor))
+
+# US + Kreung discrete (Dataset S2), z-scored per slider within each population: input to target 4
+all_long <- s2 |>
+  pivot_longer(all_of(sliders), names_to = "slider", values_to = "value") |>
+  group_by(population, slider) |>
+  mutate(z = (value - mean(value)) / sd(value)) |>
+  ungroup() |>
+  mutate(across(c(pid, population, modality, emotion, slider), factor))
+
+# --- Check against SI Table S1 (raw means) and Table S2 (z-scored discrete means)
+# Values typed from the SI; rows rate, jitter, consonance, size, direction;
+# within a row: angry, happy, peaceful, sad, scared
+si_table <- function(population, values) {
+  tibble(population = population, slider = rep(sliders, each = 5),
+         emotion = rep(emotions, 5), paper = values)
+}
+table_s1 <- bind_rows(
+  si_table("us", c(331.00, 280.12, 69.48, 53.74, 289.68,   53.70, 33.24, 11.30, 19.44, 58.22,
+                   8.00, 32.00, 32.34, 22.66, 10.08,         67.92, 49.36, 23.66, 26.28, 52.28,
+                   76.94, 35.56, 38.34, 78.30, 51.12)),
+  si_table("kreung", c(1.42, 1.18, 0.76, 0.39, 1.15,   1.06, 0.84, 0.80, 1.09, 1.00,
+                       1.01, 1.33, 1.31, 1.34, 0.99,   1.05, 0.75, 0.79, 0.75, 1.16,
+                       1.20, 0.80, 0.92, 1.13, 1.16)))
+table_s2 <- bind_rows(
+  si_table("us", c(0.90, 0.58, -1.00, -1.07, 0.60,   0.46, 0.05, -0.68, -0.36, 0.53,
+                   -0.77, 0.68, 0.72, 0.09, -0.72,   0.69, 0.11, 0.64, -0.49, 0.24,
+                   0.66, -0.69, -0.59, 0.71, -0.09)),
+  si_table("kreung", c(0.52, 0.23, -0.26, -0.70, 0.20,   0.12, -0.15, -0.19, 0.16, 0.05,
+                       -0.23, 0.17, 0.14, 0.18, -0.26,   0.17, -0.17, -0.13, -0.18, 0.31,
+                       0.19, -0.29, -0.15, 0.10, 0.15)))
+
+mine_s1 <- bind_rows(
+  us_long |> mutate(population = "us"),
+  all_long |> filter(population == "kreung")) |>
+  mutate(across(c(population, slider, emotion), as.character)) |>
+  group_by(population, slider, emotion) |>
+  summarise(mine = mean(value), .groups = "drop")
+mine_s2 <- all_long |>
+  mutate(across(c(population, slider, emotion), as.character)) |>
+  group_by(population, slider, emotion) |>
+  summarise(mine = mean(z), .groups = "drop")
+
+s1_check <- left_join(table_s1, mine_s1, by = c("population", "slider", "emotion"))
+s2_check <- left_join(table_s2, mine_s2, by = c("population", "slider", "emotion"))
+# Largest absolute difference from Table S1, per population (should be <= .005, i.e. rounding)
+s1_check |> group_by(population) |> summarise(max_abs_diff = max(abs(mine - paper)))
+# Table S2 cells that differ from my z-scored means by more than rounding
+s2_check |> filter(abs(mine - paper) > 0.01) |> mutate(mine = round(mine, 3))
 ```
+
+My nearest-value discretization of Dataset S1 matches Dataset S2 on every US value except three
+that sit exactly halfway between two levels; Dataset S2 rounds those down, and I use S2 as given
+(**D6**). The raw means match SI Table S1 to rounding for both populations, so the files are the
+data the paper summarizes. The z-scored means match SI Table S2 except for two "Size" cells for the
+US. Peaceful is printed as +0.64 where the data give −0.64, a plain sign flip. Sad is printed as
+−0.49 where the discrete data give −0.41; −0.49 is what z-scoring the continuous data gives
+(−0.486), so that cell was probably taken from the continuous data rather than mistyped. Neither
+cell is a target.
+
+### Targets 1–3: United States ANOVA
+
+The paper analyzed "the positions of the sliders for each modality … and each emotion … using
+multiway ANOVA". I fit a mixed ANOVA with Emotion (5) × Slider (5) within participants and Modality
+(music vs. movement) between participants. The dependent variable is the raw slider value in its own
+units (**D3**). Every within-participant effect gets the Greenhouse–Geisser correction (**D4**),
+and sums of squares are Type III (**D5**). The US design is balanced, so Type II gives the same
+result.
 
 ```{r}
 #| label: analysis
+us_tab <- fit_us(us_long)
+us_tab |> select(Effect, DFn, DFd, F = F_rstatix, p, `p<.05`, pes = pes_rstatix) |>
+  kable(caption = "US experiment (N = 50): mixed ANOVA on raw slider values, GG-corrected df")
+
+tibble(
+  effect = c("Emotion (target 1)", "Emotion &times; Slider (target 2, key effect)",
+             "Emotion &times; Modality (target 3)", "Modality (not a target)",
+             "Emotion &times; Slider &times; Modality (not a target)"),
+  paper = c("F(2.97, 142.44) = 185.56, P < 0.001, &eta;p&sup2; = 0.79",
+            "F(4.81, 230.73) = 112.90, P < 0.001, &eta;p&sup2; = 0.70",
+            "F(2.97, 142.44) = 0.97, P > 0.4, &eta;p&sup2; = 0.02",
+            "F(1, 48) = 4.66, P < 0.05, &eta;p&sup2; = 0.09",
+            "F(4.81, 230.73) = 4.50, P < 0.001, &eta;p&sup2; = 0.09"),
+  reproduced = c(report_F(us_tab, "emotion"), report_F(us_tab, "emotion:slider"),
+                 report_F(us_tab, "modality:emotion"), report_F(us_tab, "modality"),
+                 report_F(us_tab, "modality:emotion:slider"))
+) |> kable(caption = "US experiment: paper vs. reproduced")
+```
+
+All three targets reproduce exactly, and so do the two other effects in the same paragraph. The
+match depends on raw units: rescaled, z-scored or discretized sliders give different epsilons and an
+Emotion F of roughly 54–57 (see the alternatives under [Analysis decisions](#analysis-decisions)).
+
+### Target 4: combined United States + Kreung ANOVA
+
+The paper "z-scored the data for each parameter (slider) separately within each population" and
+then ran a repeated-measures ANOVA with Emotion and Sliders within participants and Modality and
+Population between participants. According to the SI, the z-scoring used the discrete data, so the
+US data here are the discretized rows of Dataset S2 (**D6**). The z-scores are computed within
+population × slider, pooling modalities and emotions, with the sample SD (**D7**). Correction and
+sums of squares are as above: GG (**D4**) and Type III (**D5**). With 25/25/42/43 participants per
+between-subjects cell the design is unbalanced, so the SS type matters here.
+
+```{r}
+#| label: analysis-combined
+comb_tab <- fit_combined(all_long)
+comb_tab |> select(Effect, DFn, DFd, F = F_rstatix, p, `p<.05`, pes = pes_rstatix) |>
+  kable(caption = "US + Kreung (N = 135): mixed ANOVA on z-scored discrete data, GG-corrected df")
+
+tibble(
+  effect = c("Emotion &times; Sliders (target 4)", "Emotion", "Modality", "Population",
+             "Population &times; Modality", "Emotion &times; Population", "Emotion &times; Sliders &times; Population",
+             "Emotion &times; Modality", "Emotion &times; Modality &times; Sliders", "Emotion &times; Modality &times; Sliders &times; Population"),
+  paper = c("F(13.68, 1791.80) = 38.22, P < 0.001, &eta;p&sup2; = 0.23",
+            "F(3.76, 492.23) = 40.60, P < 0.001, &eta;p&sup2; = 0.24",
+            "F(1, 131) = 0.004, P = 0.95", "F(1, 131) < 0.001, P = 0.99", "F(1, 131) = 1.15, P = 0.29",
+            "F(3.76, 492.23) = 11.53, P < 0.001, &eta;p&sup2; = 0.08",
+            "F(13.68, 1791.80) = 10.13, P < 0.001, &eta;p&sup2; = 0.07",
+            "F(3.76, 492.23) = 2.84, P = 0.02, &eta;p&sup2; = 0.02",
+            "F(13.68, 1791.80) = 4.92, P < 0.001, &eta;p&sup2; = 0.04",
+            "F(13.68, 1791.80) = 2.8, P < 0.001, &eta;p&sup2; = 0.02"),
+  reproduced = map_chr(c("emotion:slider", "emotion", "modality", "population", "population:modality",
+                         "population:emotion", "population:emotion:slider", "modality:emotion",
+                         "modality:emotion:slider", "population:modality:emotion:slider"),
+                       \(e) report_F(comb_tab, e))
+) |> kable(caption = "Combined ANOVA: paper vs. reproduced")
+```
+
+Target 4 reproduces exactly. The other nine effects in that paragraph also match, with two last-digit
+differences: for Emotion × Modality I get *p* = `r sprintf("%.3f", filter(comb_tab, Effect == "modality:emotion")$p)`
+where the paper prints P = 0.02, and for Emotion × Modality × Sliders I get *F* =
+`r sprintf("%.2f", filter(comb_tab, Effect == "modality:emotion:slider")$F)` (unrounded
+`r sprintf("%.3f", filter(comb_tab, Effect == "modality:emotion:slider")$F)`) where the paper prints 4.92.
+
+### Target 5: Monte Carlo simulation
+
+The paper represents "the mean results of each experiment as a 25-dimensional vector (five
+emotions × five sliders), where each dimension has a range from 0.0 to 2.0". It then samples "the
+space uniformly at random, generating one-million pairs", and compares the US–Kreung distance with
+the distribution of distances between the random pairs. Here the mean vectors come from the
+discrete data with music and movement pooled (**D8**), and the null distribution is continuous
+uniform (**D9**) with a fixed seed (**D10**).
+
+```{r}
+#| label: analysis-montecarlo
+# 25-d mean vectors (5 emotions x 5 sliders) of the discrete data, music and movement pooled
+mean_vecs <- s2 |>
+  group_by(population, emotion) |>
+  summarise(across(all_of(sliders), mean), .groups = "drop")
+v_us     <- mean_vecs |> filter(population == "us")     |> select(all_of(sliders)) |> as.matrix()
+v_kreung <- mean_vecs |> filter(population == "kreung") |> select(all_of(sliders)) |> as.matrix()
+d_obs <- sqrt(sum((v_us - v_kreung)^2))
+d_obs
+
+# Null: distances between pairs of 25-d vectors drawn uniformly from [0, width]^25.
+# Summing squared differences one dimension at a time keeps memory small.
+sim_distances <- function(n_pairs, width) {
+  d2 <- numeric(n_pairs)
+  for (j in 1:25) d2 <- d2 + (runif(n_pairs, 0, width) - runif(n_pairs, 0, width))^2
+  sqrt(d2)
+}
+set.seed(20130102)
+null_02 <- sim_distances(1e6, width = 2)  # the range the paper states (0.0 to 2.0)
+null_04 <- 2 * null_02                    # a [0, 4] draw is exactly 2 x a [0, 2] draw
+
+mc_tab <- tibble(
+  version  = c("Paper", "Stated range, 0 to 2", "Doubled: 0 to 4 (every distance &times; 2)"),
+  observed = c(4.24, d_obs, 2 * d_obs),
+  null_mean = c(8.11, mean(null_02), mean(null_04)),
+  null_sd  = c(0.97, sd(null_02), sd(null_04)),
+  z        = c(3.98, (mean(null_02) - d_obs) / sd(null_02), (mean(null_04) - 2 * d_obs) / sd(null_04)),
+  pairs_at_least_as_close = c("fewer than 30", sum(null_02 <= d_obs), sum(null_04 <= 2 * d_obs)))
+mc_tab |> kable(digits = 2, caption = "Monte Carlo: paper vs. reproduced (1,000,000 random pairs)")
+
+# The count of close pairs is random: 20 further runs of 1,000,000 pairs (seed set once, before the runs)
+set.seed(1)
+close_counts <- replicate(20, sum(sim_distances(1e6, width = 2) <= d_obs))
+summary(close_counts)
+
+# Alternative null (D9): discrete uniform on {0, 1, 2}
+set.seed(2)
+null_disc <- sqrt(rowSums((matrix(sample(0:2, 25 * 1e5, TRUE), ncol = 25) -
+                           matrix(sample(0:2, 25 * 1e5, TRUE), ncol = 25))^2))
+c(mean = mean(null_disc), sd = sd(null_disc))
+
+ggplot(tibble(distance = null_04), aes(distance)) +
+  geom_histogram(binwidth = 0.1, fill = "grey70", colour = "grey40") +
+  geom_vline(xintercept = 2 * d_obs, linewidth = 1) +
+  annotate("text", x = 2 * d_obs, y = Inf, label = sprintf("%.2f", 2 * d_obs), vjust = 1.5, hjust = -0.1) +
+  labs(title = "Null distribution on the doubled (0-4) scale, as in the paper's Fig. 4",
+       x = "Distance", y = "Frequency") +
+  theme_minimal()
+```
+
+The *z*-score reproduces up to rounding. On the stated 0–2 scale the observed distance is
+`r sprintf("%.2f", d_obs)` against a null of mean `r sprintf("%.2f", mean(null_02))` and SD
+`r sprintf("%.2f", sd(null_02))`, so *z* = `r sprintf("%.2f", (mean(null_02) - d_obs) / sd(null_02))`
+(paper: 3.98). The 0.01 gap comes from the observed distance, discussed below.
+
+The count of close pairs does not clearly reproduce. With my seed, `r sum(null_02 <= d_obs)` of the
+1,000,000 pairs were at least as close, not "fewer than 30". The count is random: across 20 further runs of a
+million pairs (seed 1, set once before the runs) it ranged from `r min(close_counts)` to `r max(close_counts)` (mean
+`r sprintf("%.1f", mean(close_counts))`), and `r sum(close_counts < 30)` of those 20 runs came in
+under 30. The paper's "fewer than 30" is therefore a possible single-run result, but a typical run
+gives about `r round(mean(close_counts))` per million. The substantive point holds under either
+count: the US–Kreung distance sits about 4 SDs below the mean of random pairs, and only a few dozen
+random pairs in a million are as close.
+
+The raw distances do not match the paper. The null mean and SD are half the paper's values
+(doubled, they give `r sprintf("%.2f", mean(null_04))` and `r sprintf("%.2f", sd(null_04))`), and
+the observed distance is half only to two decimals (`r sprintf("%.2f", d_obs)` vs. 4.24). The paper's numbers are what you get when every dimension spans 0–4, or
+equivalently when every distance is doubled (**D9**), and the axis of the paper's Fig. 4 (4 to 12)
+is on that doubled scale too. Once doubled, the observed distance is `r sprintf("%.2f", 2 * d_obs)`
+against the reported 4.24. I could not close that 0.01 gap with any variant I tried (means rounded
+to two decimals, the Table S1 Kreung means, unweighted modality means).
+
+### Target 6: distance to United States prototypes
+
+The paper derived US prototypes by "selecting the median value for each slider for each emotion
+(for music and movement combined) from the United States results and mapping those values to the
+closest Kreung setting" (**D11**). It then "measured the similarity of each of the Kreung
+datapoints to the corresponding United States prototype by calculating the Euclidean distance". I
+read that as follows: for each Kreung emotion, average each response's distance to each prototype,
+and call the emotion matched if its own prototype has the smallest average (**D12**).
+
+```{r}
+#| label: analysis-prototypes
+# US prototypes: median of the continuous US data per emotion x slider (music + movement),
+# snapped to the nearest Kreung setting in Table S4 (0 = low, 1 = medium, 2 = high)
+us_medians <- s1 |> group_by(emotion) |> summarise(across(all_of(sliders), median))
+prototypes <- us_medians |>
+  mutate(across(all_of(sliders), \(x) nearest_level(x, s4_levels[[cur_column()]])))
+us_medians |> kable(caption = "US medians (continuous units)")
+prototypes |> kable(caption = "US prototypes (0 = low, 1 = medium, 2 = high)")
+# Paper: sad median rate = 46 BPM; sad prototype = low rate, low jitter, medium consonance,
+# low step size, high (downward) direction
+stopifnot(us_medians$bpm[us_medians$emotion == "sad"] == 46,
+          all(prototypes[prototypes$emotion == "sad", sliders] == c(0, 0, 1, 0, 2)),
+          !anyNA(prototypes))
+
+proto_mat <- prototypes |> select(all_of(sliders)) |> as.matrix()
+rownames(proto_mat) <- prototypes$emotion
+# Euclidean distance from each row of X (5 slider values) to each of the 5 prototypes
+dist_to_protos <- function(X) t(apply(X, 1, function(v) sqrt(colSums((t(proto_mat) - v)^2))))
+
+kreung  <- filter(s2, population == "kreung")
+subsets <- list(combined = c("music", "motion"), music = "music", movement = "motion")
+
+# method "mean_of_distances": average over responses of response-to-prototype distance (D12)
+# method "distance_of_mean":  distance from the Kreung mean vector to each prototype (alternative)
+proto_results <- function(method) {
+  imap_dfr(subsets, function(mods, subset_name) {
+    map_dfr(emotions, function(e) {
+      X <- kreung |> filter(modality %in% mods, emotion == e) |> select(all_of(sliders)) |> as.matrix()
+      d <- if (method == "mean_of_distances") colMeans(dist_to_protos(X))
+           else dist_to_protos(matrix(colMeans(X), nrow = 1))[1, ]
+      names(d) <- rownames(proto_mat)
+      ord <- sort(d)
+      tibble(subset = subset_name, kreung_emotion = e, closest = names(ord)[1], second = names(ord)[2],
+             dist_own = d[[e]], dist_nearest_other = min(d[names(d) != e]))
+    })
+  }) |> mutate(matched = closest == kreung_emotion, margin = dist_nearest_other - dist_own)
+}
+proto_counts <- function(res) {
+  res |>
+    mutate(subset = factor(subset, levels = names(subsets))) |>
+    group_by(subset) |>
+    summarise(n_matched = sum(matched),
+              matched_emotions = paste(kreung_emotion[matched], collapse = ", "),
+              unmatched_emotions = paste(kreung_emotion[!matched], collapse = ", "))
+}
+
+proto_main <- proto_results("mean_of_distances")
+proto_main |> kable(digits = 3, caption = "Mean distance from Kreung responses to US prototypes (D12)")
+proto_main_counts <- proto_counts(proto_main)
+proto_main_counts |>
+  mutate(paper = c("4 of 5 (all but angry)", "3 of 5 (happy, sad, scared)", "4 of 5 (all but angry)")) |>
+  kable(caption = "Kreung emotions closest to the matching US prototype: reproduced vs. paper")
+
+# Alternative (D12): distance from the Kreung mean vector
+proto_alt <- proto_results("distance_of_mean")
+proto_alt_counts <- proto_counts(proto_alt)
+proto_alt_counts |> kable(caption = "Alternative: distance from the Kreung mean vector")
+```
+
+```{r}
+#| label: prototype-details
+#| include: false
+pm <- function(sub, emo, col) filter(proto_main, subset == sub, kreung_emotion == emo)[[col]]
+```
+
+All three target counts reproduce under D12. On combined data, every emotion except angry is closest
+to its own US prototype. Movement alone gives the same result. On music alone, happy, sad and
+scared match. The failures also follow the paper. Kreung angry music is closest to the US
+`r pm("music", "angry", "closest")` prototype, and angry movement is closest to
+`r pm("movement", "angry", "closest")`. Kreung peaceful music is closest to the US
+`r pm("music", "peaceful", "closest")` prototype. One detail differs. The paper says peaceful music
+was "second closest to the United States 'peaceful' prototype", but here the second closest is
+`r pm("music", "peaceful", "second")`.
+
+The counts are fragile. Combined peaceful beats its nearest rival by only
+`r sprintf("%.4f", pm("combined", "peaceful", "margin"))`, and movement scared by only
+`r sprintf("%.4f", pm("movement", "scared", "margin"))` (mean distances on a 0–2 grid). That fragility shows in the alternative
+reading: with the distance from the Kreung mean vector to each prototype, combined drops to
+`r proto_alt_counts$n_matched[1]` of 5 and movement to `r proto_alt_counts$n_matched[3]` of 5,
+because peaceful no longer matches in either. Music stays at `r proto_alt_counts$n_matched[2]` of 5.
+
+### Analysis decisions {#analysis-decisions}
+
+The paper and SI leave the following choices open. For each one: what I chose, why, and what
+happens under a reasonable alternative.
+
+```{r}
+#| label: sensitivity
+# --- Targets 1-3 under alternative choices (D1, D3, D4)
+us_drop <- us_long |> filter(!str_detect(pid, "^MoMR")) |> droplevels()           # D1: drop both MoMR blocks
+us_avg  <- s1 |>                                                                   # D1: MoMR as one person (average)
+  group_by(subject, modality, emotion) |>
+  summarise(across(all_of(sliders), mean), .groups = "drop") |>
+  rename(pid = subject) |>
+  pivot_longer(all_of(sliders), names_to = "slider", values_to = "value") |>
+  mutate(across(c(pid, modality, emotion, slider), factor))
+us_scaled <- us_long |>                                                            # D3: other DV scales
+  group_by(slider) |>
+  mutate(z = (value - mean(value)) / sd(value),
+         range01 = (value - min(value)) / (max(value) - min(value))) |>
+  ungroup() |>
+  left_join(all_long |> filter(population == "us") |> select(pid, emotion, slider, discrete = value),
+            by = c("pid", "emotion", "slider"))
+
+us_variants <- list(
+  "Used: raw units, MoMR = 2 people, GG"          = fit_us(us_long),
+  "D1: drop both MoMR blocks (N = 48)"            = fit_us(us_drop),
+  "D1: average MoMR blocks into 1 person (N = 49)" = fit_us(us_avg),
+  "D3: z-scored per slider"                       = fit_us(us_scaled, dv = "z"),
+  "D3: each slider rescaled to 0-1"               = fit_us(us_scaled, dv = "range01"),
+  "D3: discretized 0/1/2 (Dataset S2)"            = fit_us(us_scaled, dv = "discrete"),
+  "D4: Huynh-Feldt instead of GG"                 = fit_us(us_long, correction = "HF"),
+  "Caveat check for D3: raw units, rate slider left out (4 sliders)" =
+    fit_us(us_long |> filter(slider != "bpm") |> droplevels()))
+imap_dfr(us_variants, \(tab, name) tibble(
+  variant = name,
+  `target 1: Emotion` = report_F(tab, "emotion"),
+  `target 2: Emotion &times; Slider` = report_F(tab, "emotion:slider"),
+  `target 3: Emotion &times; Modality` = report_F(tab, "modality:emotion"))) |>
+  kable(caption = "Targets 1-3 under alternative choices (paper: 185.56 / 112.90 / 0.97)")
+
+# --- Target 4 under alternative choices (D5, D6, D7)
+comb_cont <- bind_rows(filter(s2, population == "kreung"), mutate(s1, population = "us")) |>
+  pivot_longer(all_of(sliders), names_to = "slider", values_to = "value") |>
+  group_by(population, slider) |>
+  mutate(z = (value - mean(value)) / sd(value)) |>
+  ungroup() |>
+  mutate(across(c(pid, population, modality, emotion, slider), factor))
+comb_alt <- all_long |>
+  group_by(population, slider) |>
+  mutate(z_popsd = (value - mean(value)) / sqrt(mean((value - mean(value))^2))) |>
+  group_by(population, modality, slider) |>
+  mutate(z_by_modality = (value - mean(value)) / sd(value)) |>
+  ungroup()
+
+comb_variants <- list(
+  "Used: S2 discrete, z within population, sample SD, Type III" = fit_combined(all_long),
+  "D5: Type II sums of squares"                                 = fit_combined(all_long, type = 2),
+  "D6: US continuous data (S1) instead of S2 discrete"          = fit_combined(comb_cont),
+  "D7: population SD (divide by n)"                             = fit_combined(comb_alt, dv = "z_popsd"),
+  "D7: z within population x modality"                          = fit_combined(comb_alt, dv = "z_by_modality"),
+  "D7: no z-scoring (discrete 0/1/2)"                           = fit_combined(all_long, dv = "value"))
+imap_dfr(comb_variants, \(tab, name) tibble(
+  variant = name, `target 4: Emotion &times; Sliders` = report_F(tab, "emotion:slider"))) |>
+  kable(caption = "Target 4 under alternative choices (paper: F(13.68, 1791.80) = 38.22, &eta;p&sup2; = 0.23)")
+```
+
+- **D1. Participant IDs.** Chose to treat the two `MoMR` blocks as two participants. Why: they are
+  separate blocks of five rows with different settings, and the paper's n = 25 per US group and its
+  error df of 48 require 50 people. Alternatives: dropping both blocks (N = 48) or averaging them into
+  one person (N = 49) shifts the df and the F values slightly. The key effect, for example, becomes
+  `r report_F(us_variants[[2]], "emotion:slider")` or
+  `r report_F(us_variants[[3]], "emotion:slider")` instead of F(4.81, 230.73) = 112.90 (table above).
+  Only the choice I used matches.
+- **D2. Exclusions.** None. The paper mentions none, and the group sizes in the data match the
+  paper's n's.
+- **D3. DV of the US ANOVA.** Chose raw slider values in their own units (rate 30–400 BPM, jitter
+  0–99, consonance 0–37, step size and direction 0–100). The paper says only "positions of the
+  sliders". Why: this is the only scale that reproduces the F values and the GG epsilons (e.g.,
+  0.74 for Emotion). Alternatives: z-scored, 0–1 rescaled or discretized sliders give an Emotion F
+  of roughly 54–57 and a key effect of roughly 43–50 (table above), so none of the targets match. A
+  caveat about the authors' choice: in raw units the rate slider (range 30–400) dominates the sums
+  of squares. With rate left out, the Emotion effect drops to
+  `r report_F(us_variants[[8]], "emotion")` (last row of the table above). This bears on how to
+  interpret the US ηp² values, not on whether they reproduce.
+- **D4. Sphericity correction.** Chose Greenhouse–Geisser on every within-participant effect. The
+  paper prints fractional df but does not name the correction. Why: GG reproduces every reported df
+  exactly. Alternative: Huynh–Feldt gives larger df (table above), which do not match.
+- **D5. Sums of squares.** Chose Type III, the SPSS default (the paper names no software). Why: in
+  the unbalanced combined design (25/25/42/43) only Type III reproduces target 4. Type II gives
+  F = `r sprintf("%.2f", filter(comb_variants[[2]], Effect == "emotion:slider")$F)` and
+  ηp² = `r sprintf("%.2f", filter(comb_variants[[2]], Effect == "emotion:slider")$pes)` instead of
+  38.22 and .23. For the balanced US design the two types are identical.
+- **D6. US data in the combined analyses (targets 4 and 5).** Chose the authors' discretized US rows
+  from Dataset S2, as given. Why: the SI says the z-scored analysis used the discrete data. My own
+  nearest-value discretization agrees with S2 except at three values that sit exactly halfway
+  between two levels (consonance 17 twice, step size 69), which S2 rounds down. Alternative: z-scoring
+  the continuous US data (S1) instead gives
+  `r report_F(comb_variants[[3]], "emotion:slider")` for target 4, which does not match.
+- **D7. z-scoring.** Chose to z-score within population × slider, pooling modalities and emotions,
+  with the sample SD (n − 1). The paper says "within each population" but does not give the SD
+  formula. Alternatives: the population SD (n) gives
+  F = `r sprintf("%.2f", filter(comb_variants[[4]], Effect == "emotion:slider")$F)`, and z-scoring
+  within population × modality gives
+  `r report_F(comb_variants[[5]], "emotion:slider")`. Both are close, but only the version I used is
+  exact.
+- **D8. Monte Carlo mean vectors.** Chose the mean of the discrete values per emotion × slider for
+  each population, pooling music and movement so that each participant counts once. The paper says
+  only "mean results of each experiment". Alternative: averaging the music and movement means with
+  equal weight gives the same distance to three decimals.
+- **D9. Monte Carlo null distribution.** Chose continuous uniform sampling and report two scales.
+  The stated range (0 to 2) gives half the paper's distances (the observed one only to two decimals). A 0–4 range, which is the same
+  as doubling every distance, gives the paper's null mean of 8.11 and SD of 0.97. The z-score and the
+  count of close pairs do not depend on the scale, so the two scales give identical values for
+  those. Alternative:
+  sampling from the discrete grid {0, 1, 2} gives a null mean of
+  `r sprintf("%.2f", mean(null_disc))` and SD of `r sprintf("%.2f", sd(null_disc))`, matching
+  neither scale.
+- **D10. Monte Carlo randomness.** Chose seed 20130102 and counted a pair as "this close" when its
+  distance was ≤ the observed distance. I did not search for a seed that matches the paper. The
+  count is random: my seed gives `r sum(null_02 <= d_obs)`, and across 20 further runs (seed 1, set
+  once) the count ranged from `r min(close_counts)` to `r max(close_counts)` (`r sum(close_counts < 30)` of 20 below
+  30). The paper's "fewer than 30" is consistent with one lucky draw.
+- **D11. US prototypes.** Chose the continuous medians from Dataset S1 with music and movement
+  combined, each snapped to the nearest Table S4 value. The paper specifies this. The only open
+  detail is ties: no median fell exactly halfway between two levels, and taking medians of S2's
+  discrete values gives the same prototypes, so no alternative changes anything. The paper's worked
+  example checks out (sad median rate = 46 BPM; sad prototype low/low/medium/low/high).
+- **D12. What counts as the "Kreung result" in the prototype analysis.** Chose to average, over the
+  Kreung responses for an emotion (and modality subset), each response's Euclidean distance to each
+  US prototype, and to call the emotion matched if its own prototype has the smallest average. Why:
+  the paper says it measured the distance of "each of the Kreung datapoints" to the prototypes.
+  Alternative: the distance from the Kreung mean vector (which ranks prototypes the same way as mean
+  squared distance) gives `r proto_alt_counts$n_matched[1]` of 5 combined and
+  `r proto_alt_counts$n_matched[3]` of 5 for movement, so target 6 would not reproduce. Two matches
+  under my choice win by less than 0.005.
+
+### Summary table {#summary-table}
+
+```{r}
+#| label: summary-table
+mc <- function(x) sprintf("%.2f", x)
+tibble(
+  `#` = 1:6,
+  target = c("US: Emotion main effect", "US: Emotion &times; Slider (key effect)", "US: Emotion &times; Modality",
+             "US + Kreung: Emotion &times; Sliders", "Monte Carlo: US vs. Kreung distance",
+             "Kreung closest to matching US prototype"),
+  `paper value(s)` = c(
+    "F(2.97, 142.44) = 185.56, p < .001, &eta;p&sup2; = .79",
+    "F(4.81, 230.73) = 112.90, p < .001, &eta;p&sup2; = .70",
+    "F(2.97, 142.44) = 0.97, p > .4, &eta;p&sup2; = .02",
+    "F(13.68, 1791.80) = 38.22, p < .001, &eta;p&sup2; = .23",
+    "distance = 4.24; null M = 8.11, SD = 0.97; z = 3.98; < 30 of 1,000,000 pairs as close",
+    "combined: 4 of 5 (not angry); movement: 4 of 5; music: 3 of 5 (happy, sad, scared)"),
+  `reproduced value(s)` = c(
+    report_F(us_tab, "emotion"),
+    report_F(us_tab, "emotion:slider"),
+    report_F(us_tab, "modality:emotion"),
+    report_F(comb_tab, "emotion:slider"),
+    sprintf("0-2 scale: distance = %s; null M = %s, SD = %s; z = %s; %d of 1,000,000 pairs. Doubled (0-4): distance = %s; null M = %s, SD = %s",
+            mc(d_obs), mc(mean(null_02)), mc(sd(null_02)), mc((mean(null_02) - d_obs) / sd(null_02)),
+            sum(null_02 <= d_obs), mc(2 * d_obs), mc(mean(null_04)), mc(sd(null_04))),
+    with(proto_main_counts, sprintf("combined: %d of 5 (not %s); movement: %d of 5 (not %s); music: %d of 5 (%s)",
+                                    n_matched[1], unmatched_emotions[1], n_matched[3], unmatched_emotions[3],
+                                    n_matched[2], matched_emotions[2]))),
+  note = c(
+    "Exact. Requires raw slider units (D3), MoMR as two participants (D1), GG (D4).",
+    "Exact, same requirements as row 1.",
+    "Exact (p = .407).",
+    "Exact. Requires Type III SS (D5), S2 discrete US data (D6), z within population with sample SD (D7). The other 9 effects in the paragraph also match (Emotion &times; Modality p = .027 vs. printed .02; Emotion &times; Modality &times; Sliders F = 4.91 vs. printed 4.92).",
+    sprintf("z reproduces to rounding (%s vs. 3.98, because the observed distance is %s vs. 4.24 after doubling). Every distance on the stated 0-2 scale is half the paper's (the observed one only to two decimals); the paper's numbers match a 0-4 range (D9). The close-pair count is random: %d with my seed, %d-%d across 20 further runs (mean %.0f), so 'fewer than 30' is a possible but below-typical draw (D10).",
+            mc((mean(null_02) - d_obs) / sd(null_02)), mc(2 * d_obs),
+            sum(null_02 <= d_obs), min(close_counts), max(close_counts), mean(close_counts)),
+    "Reproduced with the mean of per-response distances (D12), including which emotions fail. Fragile: two matches win by < .005, and the Kreung-mean-vector reading gives 3 of 5 combined and 3 of 5 movement. Peaceful music's second-closest prototype is scared, not peaceful as the paper says.")
+) |> kable(caption = "Summary: one row per target outcome")
 ```
 
 ## Checker's verdict
@@ -83,27 +675,59 @@ Filled in by you, not the agent.
 
 | # | Paper value | Reproduced value | Verdict (exact / minor / major / not reproducible) | Reason for discrepancy |
 |---|---|---|---|---|
-| 1 | | | | |
-| 2 | | | | |
-| 3 | | | | |
+| 1 | *F*(2.97, 142.44) = 185.56, *p* < .001, ηp² = .79 | *F*(2.97, 142.44) = 185.56, *p* < .001, ηp² = .79 | exact | none, it takes 3 choices the paper doesn't state: raw slider units as the DV, the label `MoMR` split into two participants, and the Greenhouse–Geisser correction |
+| 2 | **Key effect.** *F*(4.81, 230.73) = 112.90, *p* < .001, ηp² = .70 | *F*(4.81, 230.73) = 112.90, *p* < .001, ηp² = .70 | exact | none, same 3 choices as row 1 |
+| 3 | *F*(2.97, 142.44) = 0.97, *p* > .4, ηp² = .02 | *F*(2.97, 142.44) = 0.97, *p* = .407, ηp² = .02 | exact | none, same 3 choices as row 1. |
+| 4 | *F*(13.68, 1791.80) = 38.22, *p* < .001, ηp² = .23 | *F*(13.68, 1791.80) = 38.22, *p* < .001, ηp² = .23 | exact | none, it takes Type III sums of squares (Type II gives a different *F* in this unbalanced design) and the authors' discretized US data, z-scored within each populationl the other 9 effects in that paragraph also match, except that the paper prints *p* = .02 for Emotion × Modality where the data give .027, and *F* = 4.92 for Emotion × Modality × Sliders where the data give 4.91. |
+| 5 | distance = 4.24; null *M* = 8.11, *SD* = 0.97; *z* = 3.98; < 30 of 1,000,000 random pairs as close | on the stated 0–2 range: distance = 2.12; null *M* = 4.05, *SD* = 0.49; *z* = 3.99; 44 of 1,000,000 pairs. on a 0–4 range: distance = 4.23; null *M* = 8.11, *SD* = 0.97 | major | the paper says each dimension ranges from 0.0 to 2.0, and that gives half of every reported distance (the observed one only to two decimals), and the reported numbers come back only on a 0–4 range the paper doesn't mentions, and even then the observed distance is 4.23, not 4.24; the test itself (*z* = 3.99) reproduces, so the conclusion stands. |
+| 6 | combined: 4 of 5 (not angry); movement: 4 of 5; music: 3 of 5 (happy, sad, scared) | combined: 4 of 5 (not angry); movement: 4 of 5; music: 3 of 5 (happy, sad, scared) | exact | none under the literal reading of "each of the Kreung datapoints"; measuring from the Kreung mean vector instead gives 3 of 5 for combined and for movement, two matches win by less than .005 |
 
-Agent's own claim about success, and whether it was right:
+
+Agent's own claim about success, and whether it was right: 
+The agent said "four of the six targets reproduce exactly (including the key effect), and the other two reproduce in substance with small discrepancies, so I think the check succeeded." That's right, and its account of each discrepancy was accurate. I grade two targets differently.
+Target 6 is **exact**, not "reproduced but fragile", because the counts match under the literal reading of the
+paper. Target 5 is **major**, not "partly", because the method the paper states gives half the
+reported distances. Without any hint, the agent found the 3 problems (the duplicated participant label, the unstated slider units, the doubled Monte Carlo range) and two errors in SI Table S2 (for US step size, "peaceful" has its sign flipped (+0.64 vs. −0.64), and "sad" (−0.49) matches the continuous data (−0.486), not the discrete data the table reports (−0.41)).
 
 ## Time
 
-- Your time (hours):
-- Agent wall-clock time (hours):
-- Stopped at the 4-hour cap? What remained:
+- Your time (hours): 3.7
+- Agent wall-clock time (hours): 0.23
+- Stopped at the 4-hour cap? What remained: n/a
 
 ## Assessment
 
-Is the primary result analytically reproducible? What would have made this take 30 minutes?
+Is the primary result analytically reproducible? 
+
+Yes. The key effect (the United States Emotion × Slider interaction (ηp² = .70)) reproduces exactly
+from the authors' data. So do the other two US ANOVA targets (the combined US + Kreung ANOVA and the
+prototype counts). But nothing reproduced from the paper's description alone. The numbers come out
+only after guessing the DV scale (raw units), how to handle a duplicated participant label,
+the sphericity correction, the type of sums of squares, how to read the prototype analysis,
+and the Monte Carlo range.
+
+What would have made this take 30 minutes: the analysis script, or failing that, one sentence naming
+the software and settings (raw slider units, Greenhouse–Geisser, Type III); unique participant IDs; a
+codebook for the column names; and the Monte Carlo range that was actually used.
+
+Looking at my classmate's replication, z-scored replication should be compared with .49,
+or analyzed in raw units to compare with .70. It is because .70 is computed on raw slider units, where the rate
+slider (30–400) dominates. In those units the Slider main effect (which the paper doesn't report) is
+*F*(2.00, 96.04) = 863.31, ηp² = .95. That is larger than the Emotion effect the paper calls "the
+largest main effect". Leaving rate out drops the Emotion effect from ηp² = .79 to .42. The
+replication's analysis code z-scores each slider instead, and on the original data that scaling
+gives *F*(9.87, 473.72) = 46.60, ηp² = .49 for the key effect, not .70.
 
 ## AI documentation
 
-- Agent and interface (e.g., Claude Code, Codex CLI, Cursor):
-- Model and version, if the tool reports it:
-- Context you gave it (files, instructions, any context file):
-- Number of times you intervened, and the most important intervention:
-- Transcript: link to the exported transcript in your repo (`transcripts/`). If your tool
-  cannot export one, paste your prompts in order here instead.
+- Agent and interface (e.g., Claude Code, Codex CLI, Cursor): Claude Code, in the Claude desktop
+  app (Code tab).
+- Model and version, if the tool reports it: Claude Opus 5.5 (`claude-opus-5-5`).
+- Context you gave it (files, instructions, any context file): one prompt and the repo. The repo held `partB.qmd` with the targets, the materials
+inventory, `partB/data/` (Datasets S1–S2), and local copies of the article and SI PDFs. The PDFs are not in the public repo because they are under the publisher's copyright.
+- Number of times you intervened, and the most important intervention: 1 to re-check.
+- Transcript: [partB_agent_transcript.md](https://github.com/nickmadibekov/psych251-ps3/blob/main/transcripts/partB_agent_transcript.md)
+  (readable) and [partB_agent_transcript.jsonl](https://github.com/nickmadibekov/psych251-ps3/blob/main/transcripts/partB_agent_transcript.jsonl)
+  (full record). They come from the Claude desktop app's session log. App-internal records were
+  dropped, my home path and email were redacted, and the two publisher PDFs the agent read were
+  replaced by a note.
